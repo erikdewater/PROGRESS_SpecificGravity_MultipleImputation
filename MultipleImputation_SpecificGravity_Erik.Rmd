@@ -1,0 +1,77 @@
+---
+title: "MultipleImputation_SpecificGravity"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+#Install and load required packages
+```{r}
+install.packages("mice")
+install.packages("lubridate")
+library(lubridate)
+library(haven)
+library(mice)
+library(data.table)
+library(ggplot2)
+```
+
+## Set path and import data
+```{r}
+path = '/Users/dewate01/Desktop/PROGRESS_SpecificGravity_MultipleImputation/PROGRESS_SpecificGravity_MultipleImputation'
+setwd(path)
+SG_data = read.csv('ERIK_NIA_SG_imp_oct10_2018.csv')
+```
+
+##compute season of collection date to control for seasonal variation in data collection. First convert the date into a single number, and then take the sine/cosine of that number as a measure of season
+```{r}
+date = mdy(SG_data$fecha_control)
+days = yday(date) 
+```
+
+## create an average variable that represents the geometric mean of 5 phthalates that are weakly correlated with each other (as recommendended by Dr. Alan Just). Associations between this average phthalates variable and specific gravity will later be explored
+```{r}
+#create natural log of phtalates of interest
+SG_data$mEP2_Conc_ngml_l <- log(SG_data$mEP2_Conc_ngml)
+SG_data$mBP_Conc_ngml_l <- log(SG_data$mBP_Conc_ngml)
+SG_data$miBP_Conc_ngml_l <- log(SG_data$miBP_Conc_ngml)
+SG_data$mBzP2_Conc_ngml_l <- log(SG_data$mBzP2_Conc_ngml)
+SG_data$mECPP_Conc_ngml_l <- log(SG_data$mECPP_Conc_ngml)
+
+#create exponential function then create variable which is geometric mean
+e <- exp(1) 
+SG_data$phthalates <-e^(rowMeans(SG_data[, c("mEP2_Conc_ngml_l", "mBP_Conc_ngml_l", "miBP_Conc_ngml_l", 
+                                               "mBzP2_Conc_ngml_l", "mECPP_Conc_ngml_l")]))
+```
+
+##linear regression analyses, regressing covariates and phthalates (geometric mean of 5 phthalates) on specific gravity. These analyses are performed to check whether phthalates and covariates are linearly associated with specific gravity. Covariates were selected after consulting a clinician (NAME???) who is an expert on phthalates.  
+```{r}
+lm_BMI = lm(SG_data$SG ~ SG_data$mother_bmi)
+summary(lm_BMI)
+lm_MatAge = lm(SG_data$SG ~ SG_data$mothers_age)
+summary(lm_MatAge)
+lm_GestAge = lm(SG_data$SG ~ SG_data$gest_age_weeks)
+summary(lm_GestAge)
+lm_Phthalates = lm(SG_data$SG ~ SG_data$phthalates)
+summary(lm_Phthalates)
+lm_PhthalatesCovariates = lm(SG_data$SG ~ SG_data$phthalates + SG_data$mother_bmi + SG_data$mothers_age + SG_data$gest_age_weeks)
+summary(lm_PhthalatesCovariates)
+```
+
+##Check distribution of specific gravity. Check for normal distribution and outliers
+```{r}
+#plot a histogram to check distribution
+ggplot(data = SG_data, aes(x = SG, fill = "Red")) +geom_histogram()
+
+#compute mean and SD and check whether there are SG values >3 SD's above/below mean
+mean_SG = mean(SG_data$SG, na.rm =T)
+sd_SG = sd(SG_data$SG, na.rm =T)
+SD3_below = mean_SG - (3*sd_SG)
+SD3_above = mean_SG + (3*sd_SG)
+minSG = min(SG_data$SG, na.rm=T)
+maxSG = max(SG_data$SG, na.rm=T)
+SG_data$SG_outlier [SG_data$SG> SD3_above] <-1
+SG_data$SG_outlier [SG_data$SG< SD3_above] <-0
+```
