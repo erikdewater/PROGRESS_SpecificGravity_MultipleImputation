@@ -1,6 +1,8 @@
 ---
 title: "MultipleImputation_SpecificGravity"
-output: html_document
+output:
+  pdf_document: default
+  html_document: default
 ---
 
 ```{r setup, include=FALSE}
@@ -25,10 +27,13 @@ setwd(path)
 SG_data = read.csv('ERIK_NIA_SG_imp_oct10_2018.csv')
 ```
 
-##compute season of collection date to control for seasonal variation in data collection. First convert the date into a single number, and then take the sine/cosine of that number as a measure of season
+##compute season of collection date to control for seasonal variation in data collection. First convert the date into a single number, and then compute the sine and cosine of time as indexes of season
 ```{r}
 date = mdy(SG_data$fecha_control)
 days = yday(date) 
+
+SG_data$time.sin = sinpi(2 * (days - 1)/(365 +max(days, na.rm = T) - 1))
+SG_data$time.cos = cospi(2 * (days - 1)/(365 +max(days, na.rm = T) - 1))
 ```
 
 ## create an average variable that represents the geometric mean of 5 phthalates that are weakly correlated with each other (as recommendended by Dr. Alan Just). Associations between this average phthalates variable and specific gravity will later be explored
@@ -55,8 +60,12 @@ summary(lm_MatAge)
 lm_GestAge = lm(SG_data$SG ~ SG_data$gest_age_weeks)
 summary(lm_GestAge)
 lm_Phthalates = lm(SG_data$SG ~ SG_data$phthalates)
-summary(lm_Phthalates)
-lm_PhthalatesCovariates = lm(SG_data$SG ~ SG_data$phthalates + SG_data$mother_bmi + SG_data$mothers_age + SG_data$gest_age_weeks)
+summary(lm_Phthalates) 
+lm_time.sin = lm(SG_data$SG ~ SG_data$time.sin)
+summary(lm_time.sin)
+lm_time.cos = lm(SG_data$SG ~ SG_data$time.cos)
+summary(lm_time.cos)
+lm_PhthalatesCovariates = lm(SG_data$SG ~ SG_data$phthalates + SG_data$mother_bmi + SG_data$mothers_age + SG_data$gest_age_weeks + SG_data$time.sin + SG_data$time.cos)
 summary(lm_PhthalatesCovariates)
 ```
 
