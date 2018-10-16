@@ -1,0 +1,135 @@
+---
+title: "Nia_McRae_SG_Impute_oct10_2018"
+author: "Nia McRae"
+date: "October 16, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+##Nia's R Markdown for Multiple Imputation
+
+DATE: October 16, 2018
+
+Nia McRae and Erik de Water created this R markdown for conducting multiple imputation for 100 missing Specific Gravity data
+
+They split up the work. Below is the code for Nia's steps. Erik's steps are in a seperate R markdown document
+
+Erik and Nia are using github to follow each other's work and will eventually merge their R markdowns into one complete document in an effort to produce reproducible code for multiple imputation. 
+
+#First, install and load require packages
+
+```{r variable cleaning and transformations}
+#install and load require packages
+#install.packages("mice")
+#install.packages("lubridate")
+library(haven)
+library(mice)
+library(data.table)
+library(ggplot2)
+library(lubridate)
+library(nlme)
+library(mgcv)
+library(gamm4)
+
+```
+## Load data and subset to variables you need for the analysis
+
+```{r load data, echo=FALSE}
+
+#load data
+SG_data <- read_sas("J:/PM/Element/DATABASES-Mexico/DATASETS SENT/erik_nia_sg_imp_oct10_2018.sas7bdat")
+
+SG_data <-as.data.table(SG_data)
+
+#subset to variables needed for model
+SG_sub <- SG_data[,.(folio, gest_age_weeks, etapa, mothers_age, fecha_control, mother_bmi, SG,
+mEP2_Conc_ngml, mBP_Conc_ngml, miBP_Conc_ngml, mBzP2_Conc_ngml, mECPP_Conc_ngml)]
+
+#see that all phtalates and SG are numeric 
+class(SG_sub$mEP2_Conc_ngml)
+class(SG_sub$mBP_Conc_ngml)
+class(SG_sub$miBP_Conc_ngml)
+class(SG_sub$mBzP2_Conc_ngml)
+class(SG_sub$mECPP_Conc_ngml)
+class(SG_sub$SG)
+
+```
+## Compute Geometric Mean
+
+```{r geometric mean, echo=FALSE}
+
+#create natural log of phtalates of interest
+SG_sub[, mEP2_Conc_ngml_l := log(mEP2_Conc_ngml)]
+SG_sub[, mBP_Conc_ngml_l := log(mBP_Conc_ngml)]
+SG_sub[, miBP_Conc_ngml_l := log(miBP_Conc_ngml)]
+SG_sub[, mBzP2_Conc_ngml_l := log(mBzP2_Conc_ngml)]
+SG_sub[, mECPP_Conc_ngml_l := log(mECPP_Conc_ngml)]
+
+#create exponential function then create variable to represent the geometric #mean of all five phtalates
+e <- exp(1) 
+SG_sub[, phthalates := e^(rowMeans(SG_sub[, c("mEP2_Conc_ngml_l", "mBP_Conc_ngml_l", "miBP_Conc_ngml_l", 
+                                               "mBzP2_Conc_ngml_l", "mECPP_Conc_ngml_l")]))]
+
+```
+#create season of data collection variable by converting date of visit into days #of the year and then converting it to sine/cosine
+
+```{r season variable, echo=FALSE}
+
+SG_sub[, date := ymd(fecha_control)]
+SG_sub[, days := yday(date) ]
+
+
+SG_sub[, time.sin := sinpi(2 * (days - 1)/(365 +max(days, na.rm = T) - 1))]
+SG_sub[, time.cos := cospi(2 * (days - 1)/(365 +max(days, na.rm = T) - 1))]
+
+
+#review descriptive stats of specific gravity variable
+summary(SG_sub$SG)
+sd(SG_sub$SG, na.rm=TRUE)
+
+#review scatterplots and see if there is any outliers
+#It looks like there's one possible outlier which is value of 1.057000
+#this is more than 3 SD from the mean
+#the mean and median are the same: 1.016 
+#and the SD is really small; 0.00660113
+ggplot(SG_sub, aes(x=phthalates, y=SG)) + geom_point()
+ggplot(SG_sub, aes(x=mothers_age, y=SG)) + geom_point()
+ggplot(SG_sub, aes(x=mother_bmi, y=SG)) + geom_point()
+ggplot(SG_sub, aes(x=gest_age_weeks, y=SG)) + geom_point()
+ggplot(SG_sub, aes(x=days, y=SG)) + geom_point()
+
+```
+#lets find the folio who is the outlier and see if she is outlier in other #places as well (i.e. attendance list and comments)
+
+```{r outlier, echo=FALSE}
+
+
+#sort in ascending order to see folio with highest SG at very end
+SG_sub_ascend <- SG_sub[order(SG),]
+
+#here is the folio with the outlier
+outlier_folio <- SG_sub[folio == 380 & etapa == '3T']
+#there are no notes in attendance list or SG comments 
+#about folio 380 as outlier
+#we should probably ask clinician if this SG is plausible
+
+```
+## Conduct spline regression to see if nonlinear model is appropriate 
+
+```{r spline regression, echo=FALSE}
+#I'm using the thin plate regression spline which is the default as it is most #popularly used spline
+fit <- gam(SG ~ (phthalates) + (mothers_age) + (mother_bmi) + (gest_age_weeks) + s(days), data = SG_sub)
+summary(fit)
+#all of the edfs are lower than 8 so linear model is better fit than nonlinear #model
+
+
+#EDF Values of around 1 tend to be close to a linear term. Anything at 8 or above is non-linear 
+#as shown here: https://kevintshoemaker.github.io/NRES-746/Generalized%20Additive%20Models%20(GAMs).pdf
+#date of visit and phtalates have a significant association with SG
+```
+#This is currently the end of the code. There will be more to come after Erik and I meet with Elena. 
+
+```{r end of code, echo=FALSE}
