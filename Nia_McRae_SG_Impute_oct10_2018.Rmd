@@ -51,6 +51,8 @@ SG_data <-as.data.table(SG_data)
 SG_sub <- SG_data[,.(folio, gest_age_weeks, etapa, mothers_age, fecha_control, mother_bmi, SG,
 mEP2_Conc_ngml, mBP_Conc_ngml, miBP_Conc_ngml, mBzP2_Conc_ngml, mECPP_Conc_ngml)]
 
+SG_sub <- SG_sub[etapa =="2T"]
+
 #see that all phtalates and SG are numeric 
 class(SG_sub$mEP2_Conc_ngml)
 class(SG_sub$mBP_Conc_ngml)
@@ -123,7 +125,7 @@ outlier_folio <- SG_sub[folio == 380 & etapa == '3T']
 #Allan said set this to missing 
 
 #we are only focusing on 2T
-SG_sub <- SG_sub[etapa =="2T"]
+
 
 
 ```
@@ -172,6 +174,7 @@ predM[, c("SG", "folio")]=0
 #run the multiple (m=10) imputation model
 #instead of using default, I used "cart" method which stands for 
 #"classification and regression trees"
+
 set.seed(103)
 imputed = mice(SG_sub, method='cart', predictorMatrix=predM, m=10)
 imputed <- complete(imputed)
@@ -192,7 +195,7 @@ plot(density(imputed$SG), col="blue",
      ylab="Density", #y-axis label
      main="Density Plot of Original and Imputed Specific Gravity")#Main title
 lines(density(SG_sub$SG, na.rm=TRUE), col="red")
-legend(1.04, 50, legend=c("Original SG", "Imputed SG"),
+legend(1.025, 50, legend=c("Original SG", "Imputed SG"),
        col=c("red", "blue"), lwd=1:1, cex=0.8,
        title="SG Type", text.font=4, bg='white')
 
@@ -217,8 +220,15 @@ legend(1.04, 100, legend=c("Original SG", "Imputed SG"),
 #for multiple imputation, "cart" method (i.e. decision trees) produced better density plots 
 #than mean and default method
 
+#I'm writing cleaned dataset for Allan and Elena
+
+write.csv(SG_sub, file = "SG_Impute_Allan_Elena_oct23_2018.csv", row.names=FALSE)
+
+
 ```
 ```{r mice, echo=FALSE}
 
+
 #FINAL STEP (PENDING: merge imputed data to main dataset, set SG outlier  
 #for folio 380 to missing)
+
