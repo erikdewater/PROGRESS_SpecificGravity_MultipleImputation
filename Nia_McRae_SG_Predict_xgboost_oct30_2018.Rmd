@@ -100,11 +100,11 @@ SG_sub[, days := yday(date) ]
 ########DESCRIPTIVE STATS##########
 #review descriptive stats of specific gravity variable
 #mean: 1.016 (same as median), min=1.00, max=1.03, sd: 0.006
-summary(SG_sub$SG)
+summary(SG_sub$phthalates)
 sd(SG_sub$SG, na.rm=TRUE)
 
-SG_sub[is.na(SG), .N] #207 does not have SG
-SG_sub[!is.na(SG), .N] #847 has SG
+SG_sub[is.na(SG) & !is.na(phthalates), .N] #101 does not have SG among complete #phthalates data 
+SG_sub[!is.na(SG) & !is.na(phthalates), .N] #847 has SG
 
 
 #create ggplots with partial transparency
