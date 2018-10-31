@@ -1,0 +1,168 @@
+---
+title: "Nia_McRae_SG_Predict_xgboost_oct30_2018.Rmd"
+author: "Nia McRae"
+date: "October 31, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+##Nia's R Markdown for Multiple Imputation
+
+DATE: October 30th, 2018
+
+Nia McRae and Erik de Water created this R markdown for conducting multiple imputation for 207 missing Specific Gravity data
+
+They split up the work. Below is the code for Nia's steps. Erik's steps are in a seperate R markdown document
+
+Erik and Nia are using github to follow each other's work and will eventually merge their R markdowns into one complete document in an effort to produce reproducible code for multiple imputation. 
+
+AMENDMENT: We are not using the mice package anymore. I repeated preliminary data cleaning steps here as shown in "Nia_McRae_SG_Impute_oct10_2018.Rmd" but the final model will be from the xgboost package. It is used for predicting values which is more efficient and modern way of handling missing in contrast to mice (multiple imputation) package
+
+#First, install and load require packages
+
+```{r variable cleaning and transformations}
+#install and load require packages
+#install.packages("mice")
+#install.packages("lubridate")
+#install.packages("lattice")
+#install.packages("xgboost")
+
+library(haven)
+library(data.table)
+library(ggplot2)
+library(lubridate)
+library(nlme)
+library(mgcv)
+library(gamm4)
+library(xgboost)
+
+```
+
+## Load data and subset to variables you need for the analysis
+
+```{r load data, echo=FALSE}
+
+#load data
+SG_data <- read_sas("J:/PM/Element/DATABASES-Mexico/DATASETS SENT/erik_nia_sg_imp_oct10_2018.sas7bdat")
+
+SG_data <-as.data.table(SG_data)
+
+#subset to variables needed for model
+SG_sub <- SG_data[,.(folio, gest_age_weeks, etapa, mothers_age, fecha_control, mother_bmi, SG,
+mEP2_Conc_ngml, mBP_Conc_ngml, miBP_Conc_ngml, mBzP2_Conc_ngml, mECPP_Conc_ngml)]
+
+#subset only to 2T where bulk of missing SG are
+SG_sub <- SG_sub[etapa =="2T"]
+
+#see that all phtalates and SG are numeric 
+class(SG_sub$mEP2_Conc_ngml)
+class(SG_sub$mBP_Conc_ngml)
+class(SG_sub$miBP_Conc_ngml)
+class(SG_sub$mBzP2_Conc_ngml)
+class(SG_sub$mECPP_Conc_ngml)
+class(SG_sub$SG)
+
+
+```
+
+## Compute Geometric Mean
+
+```{r geometric mean, echo=FALSE}
+
+#create natural log of phtalates of interest
+SG_sub[, mEP2_Conc_ngml_l := log(mEP2_Conc_ngml)]
+SG_sub[, mBP_Conc_ngml_l := log(mBP_Conc_ngml)]
+SG_sub[, miBP_Conc_ngml_l := log(miBP_Conc_ngml)]
+SG_sub[, mBzP2_Conc_ngml_l := log(mBzP2_Conc_ngml)]
+SG_sub[, mECPP_Conc_ngml_l := log(mECPP_Conc_ngml)]
+
+#create exponential function then create variable to represent the geometric #mean of all five phtalates
+e <- exp(1) 
+SG_sub[, phthalates := e^(rowMeans(SG_sub[, c("mEP2_Conc_ngml_l", "mBP_Conc_ngml_l", "miBP_Conc_ngml_l", 
+                                               "mBzP2_Conc_ngml_l", "mECPP_Conc_ngml_l")]))]
+
+
+```
+
+#convert date of visit into days of the year and then converting 
+#no need to convert it to sine/cosine as xgboost doesn't 
+#require it in contrast to mice package model
+
+```{r date variable, echo=FALSE}
+
+SG_sub[, date := ymd(fecha_control)]
+SG_sub[, days := yday(date) ]
+
+
+########DESCRIPTIVE STATS##########
+#review descriptive stats of specific gravity variable
+#mean: 1.016 (same as median), min=1.00, max=1.03, sd: 0.006
+summary(SG_sub$SG)
+sd(SG_sub$SG, na.rm=TRUE)
+
+SG_sub[is.na(SG), .N] #207 does not have SG
+SG_sub[!is.na(SG), .N] #847 has SG
+
+
+#create ggplots with partial transparency
+#PENDING: still need to add smoothing term
+ggplot(SG_sub, aes(phthalates, SG, group = folio)) +
+  geom_point(alpha = 0.1) +
+  geom_line(alpha = 0.1) +
+  theme_bw()
+ggplot(SG_sub, aes(mothers_age, SG, group = folio)) +
+  geom_point(alpha = 0.1) +
+  geom_line(alpha = 0.1) +
+  theme_bw()
+ggplot(SG_sub, aes(mother_bmi, SG, group = folio)) +
+  geom_point(alpha = 0.1) +
+  geom_line(alpha = 0.1) +
+  theme_bw()
+ggplot(SG_sub, aes(gest_age_weeks, SG, group = folio)) +
+  geom_point(alpha = 0.1) +
+  geom_line(alpha = 0.1) +
+  theme_bw()
+ggplot(SG_sub, aes(days, SG, group = folio)) +
+  geom_point(alpha = 0.1) +
+  geom_line(alpha = 0.1) +
+  theme_bw()
+
+
+#there is no missing data for independent variables in regards to subjects with #SG
+#there is no missing phtalates among subjects with SG
+SG_sub[!is.na(SG) & !is.na(phthalates), .N]
+SG_sub[!is.na(SG) & is.na(phthalates), .N]
+
+#there is no missing mother's age among subjects with SG
+SG_sub[!is.na(SG) & !is.na(mothers_age), .N]
+SG_sub[!is.na(SG) & is.na(mothers_age), .N]
+
+#there is no missing mother's bmi among subjects with SG
+SG_sub[!is.na(SG) & !is.na(mother_bmi), .N]
+SG_sub[!is.na(SG) & is.na(mother_bmi), .N]
+
+#there is no missing gestational age in weeks among subjects with SG
+SG_sub[!is.na(SG) & !is.na(gest_age_weeks), .N]
+SG_sub[!is.na(SG) & is.na(gest_age_weeks), .N]
+
+#there is no missing days (i.e. day of year for collection date) in weeks among subjects with SG
+SG_sub[!is.na(SG) & !is.na(days), .N]
+SG_sub[!is.na(SG) & is.na(days), .N]
+
+```
+
+## Conduct spline regression to see if nonlinear model is appropriate 
+
+```{r spline regression, echo=FALSE}
+#I'm using the thin plate regression spline which is the default as it is most #popularly used spline
+fit <- gam(SG ~ s(phthalates) + s(mothers_age) + s(mother_bmi) + (gest_age_weeks) + (days), data = SG_sub)
+summary(fit)
+
+#all of the edfs are lower than 8 so linear model is better fit than nonlinear #model
+
+#TIPS FOR IMPROVING DENSITY PLOTS USING GGPLOT
+#add geom_smooth term for observed and unobserved/predicted values
+#use partial transparency (i.e. alpha = 0.1) to allow you to see data points atop of each other 

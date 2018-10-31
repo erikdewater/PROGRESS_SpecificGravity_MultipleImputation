@@ -30,11 +30,11 @@ library(haven)
 library(mice)
 library(data.table)
 library(ggplot2)
-library(lubridate)
 library(nlme)
 library(mgcv)
 library(gamm4)
 library(lattice)
+library(lubridate)
 #lattice package interfaces very well with the “mids” object #type that the mice function returns
 
 ```
@@ -83,13 +83,13 @@ SG_sub[, phthalates := e^(rowMeans(SG_sub[, c("mEP2_Conc_ngml_l", "mBP_Conc_ngml
 
 ```{r season variable, echo=FALSE}
 
-SG_sub[, date := ymd(fecha_control)]
-SG_sub[, days := yday(date) ]
+SG_sub[, date_visit := ymd(fecha_control)]
+SG_sub[, days := yday(date_visit) ]
 
+#have maximum be either 365 days or include leap year if there is leap year
+SG_sub[, time.sin := sinpi(2 * (days - 1)/(365 + lubridate::leap_year(date_visit)(days, na.rm = T) - 1))]
 
-SG_sub[, time.sin := sinpi(2 * (days - 1)/(365 +max(days, na.rm = T) - 1))]
-SG_sub[, time.cos := cospi(2 * (days - 1)/(365 +max(days, na.rm = T) - 1))]
-
+SG_sub[, time.cos := cospi(2 * (days - 1)/(365 + lubridate::leap_year(date_visit)(days, na.rm = T) - 1))]
 
 #review descriptive stats of specific gravity variable
 summary(SG_sub$SG)
@@ -107,7 +107,6 @@ ggplot(SG_sub, aes(x=phthalates, y=SG)) + geom_point()
 ggplot(SG_sub, aes(x=mothers_age, y=SG)) + geom_point()
 ggplot(SG_sub, aes(x=mother_bmi, y=SG)) + geom_point()
 ggplot(SG_sub, aes(x=gest_age_weeks, y=SG)) + geom_point()
-ggplot(SG_sub, aes(x=days, y=SG)) + geom_point()
 ggplot(SG_sub, aes(x=time.sin, y=SG)) + geom_point()
 ggplot(SG_sub, aes(x=time.cos, y=SG)) + geom_point()
 
@@ -133,7 +132,7 @@ outlier_folio <- SG_sub[folio == 380 & etapa == '3T']
 
 ```{r spline regression, echo=FALSE}
 #I'm using the thin plate regression spline which is the default as it is most #popularly used spline
-fit <- gam(SG ~ (phthalates) + (mothers_age) + (mother_bmi) + (gest_age_weeks) + s(time.cos) + s(time.sin), data = SG_sub)
+fit <- gam(SG ~ s(phthalates) + s(mothers_age) + s(mother_bmi) + (gest_age_weeks) + (time.cos) + (time.sin), data = SG_sub)
 summary(fit)
 #all of the edfs are lower than 8 so linear model is better fit than nonlinear #model
 
@@ -177,7 +176,12 @@ predM[, c("SG", "folio")]=0
 
 set.seed(103)
 imputed = mice(SG_sub, method='cart', predictorMatrix=predM, m=10)
-imputed <- complete(imputed)
+#CORRECTION: using complete function from mice package is not what we wanted
+#instead, use default method (pmm) in mice package, 
+#and you should not use the complete function to apply imputation; Instead, you #should extract all bootstrapping datasets (in our case, all 10 of the #subsamples) then find the mean of all of them and apply them to imputation of #missing data
+#imputed <- complete(imputed)
+#The above information is for my edification. We have moved on to using
+#xgboost instead of mice package as shown here: #Nia_McRae_SG_Predict_xgboost_oct30_2018.Rmd
 
 #Check for missing data in the imputed dataset.
 #great! no missing
@@ -213,7 +217,7 @@ plot(density(imputed_mean$SG), col="blue",
      ylab="Density", #y-axis label
      main="Density Plot of Original and Imputed Specific Gravity")#Main title
 lines(density(SG_sub$SG, na.rm=TRUE), col="red")
-legend(1.04, 100, legend=c("Original SG", "Imputed SG"),
+legend(1.025, 80, legend=c("Original SG", "Imputed SG"),
        col=c("red", "blue"), lwd=1:1, cex=0.8,
        title="SG Type", text.font=4, bg='white')
 
