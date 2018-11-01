@@ -190,6 +190,12 @@ summary(fit)
 #all of the edfs are lower than 8 so linear model is better fit than nonlinear #model
 
 
+
+
+```
+
+```{r assign missing values, echo=FALSE}
+
 ####assign missing values among subjects with SG to test in xgboost###
 
 #see missing across main dataset
@@ -205,14 +211,6 @@ SG_nomiss[sample(1:nrow(SG_nomiss), 20), "SG"] <- NA
 
 #Confirm the presence of missings in the dataset
 sapply(SG_nomiss, function(x) sum(is.na(x)))
-
-```
-
-## Conduct spline regression to see if nonlinear model is appropriate 
-
-```{r assign missing values, echo=FALSE}
-
-
 
 #TIPS FOR IMPROVING DENSITY PLOTS USING GGPLOT
 #add geom_smooth term for observed and unobserved/predicted values
