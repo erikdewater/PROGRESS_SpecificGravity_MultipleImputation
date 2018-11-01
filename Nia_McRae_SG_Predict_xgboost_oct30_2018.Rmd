@@ -19,7 +19,7 @@ They split up the work. Below is the code for Nia's steps. Erik's steps are in a
 
 Erik and Nia are using github to follow each other's work and will eventually merge their R markdowns into one complete document in an effort to produce reproducible code for multiple imputation. 
 
-AMENDMENT: We are not using the mice package anymore. I repeated preliminary data cleaning steps here as shown in "Nia_McRae_SG_Impute_oct10_2018.Rmd" but the final model will be from the xgboost package. It is used for predicting values which is more efficient and modern way of handling missing in contrast to mice (multiple imputation) package
+AMENDMENT: We are not using the mice package anymore. I repeated preliminary data cleaning steps here as shown in "Nia_McRae_SG_Impute_oct10_2018.Rmd" but the final model will be from the xgboost package. It is used for predicting values which is a more efficient and modern way of handling missing in contrast to mice (multiple imputation) package
 
 #First, install and load require packages
 
@@ -38,6 +38,7 @@ library(nlme)
 library(mgcv)
 library(gamm4)
 library(xgboost)
+library(Hmisc)
 
 ```
 
@@ -97,14 +98,39 @@ SG_sub[, date := ymd(fecha_control)]
 SG_sub[, days := yday(date) ]
 
 
-########DESCRIPTIVE STATS##########
-#review descriptive stats of specific gravity variable
-#mean: 1.016 (same as median), min=1.00, max=1.03, sd: 0.006
-summary(SG_sub$phthalates)
-sd(SG_sub$SG, na.rm=TRUE)
 
-SG_sub[is.na(SG) & !is.na(phthalates), .N] #101 does not have SG among complete #phthalates data 
-SG_sub[!is.na(SG) & !is.na(phthalates), .N] #847 has SG
+########DESCRIPTIVE STATS##########
+#review descriptive stats of all variables for  subjects with phtalates data
+#mean: 1.016 (same as median), min=1.00, max=1.03, sd: 0.006
+
+describe(SG_sub[!is.na(phthalates)]$SG)
+describe(SG_sub[!is.na(phthalates)]$days)
+describe(SG_sub[!is.na(phthalates)]$mothers_age)
+describe(SG_sub[!is.na(phthalates)]$mother_bmi)
+describe(SG_sub[!is.na(phthalates)]$gest_age_weeks)
+
+sd(SG_sub[!is.na(phthalates)]$SG, na.rm=TRUE)
+sd(SG_sub[!is.na(phthalates)]$days, na.rm=TRUE)
+sd(SG_sub[!is.na(phthalates)]$mothers_age, na.rm=TRUE)
+sd(SG_sub[!is.na(phthalates)]$mother_bmi, na.rm=TRUE)
+sd(SG_sub[!is.na(phthalates)]$gest_age_weeks, na.rm=TRUE)
+
+
+#review descriptive stats of all variables for  subjects without phtalates data
+describe(SG_sub[is.na(phthalates)]$SG)
+describe(SG_sub[is.na(phthalates)]$days)
+describe(SG_sub[is.na(phthalates)]$mothers_age)
+describe(SG_sub[is.na(phthalates)]$mother_bmi)
+describe(SG_sub[is.na(phthalates)]$gest_age_weeks)
+
+sd(SG_sub[is.na(phthalates)]$SG, na.rm=TRUE)
+sd(SG_sub[is.na(phthalates)]$days, na.rm=TRUE)
+sd(SG_sub[is.na(phthalates)]$mothers_age, na.rm=TRUE)
+sd(SG_sub[is.na(phthalates)]$mother_bmi, na.rm=TRUE)
+sd(SG_sub[is.na(phthalates)]$gest_age_weeks, na.rm=TRUE)
+
+SG_sub[is.na(SG) & !is.na(phthalates), .N] #101 subjects does not have SG among complete #phthalates data 
+SG_sub[!is.na(SG) & !is.na(phthalates), .N] #847 subjects has SG
 
 
 #create ggplots with partial transparency
@@ -162,6 +188,31 @@ fit <- gam(SG ~ s(phthalates) + s(mothers_age) + s(mother_bmi) + (gest_age_weeks
 summary(fit)
 
 #all of the edfs are lower than 8 so linear model is better fit than nonlinear #model
+
+
+####assign missing values among subjects with SG to test in xgboost###
+
+#see missing across main dataset
+sapply(SG_sub, function(x) sum(is.na(x)))
+
+#create subset that is restricted to subjects with no missing
+SG_nomiss<-SG_sub[!is.na(SG)]
+sapply(SG_nomiss, function(x) sum(is.na(x)))
+
+#assign 20 random missing values in SG
+set.seed(1052)
+SG_nomiss[sample(1:nrow(SG_nomiss), 20), "SG"] <- NA
+
+#Confirm the presence of missings in the dataset
+sapply(SG_nomiss, function(x) sum(is.na(x)))
+
+```
+
+## Conduct spline regression to see if nonlinear model is appropriate 
+
+```{r assign missing values, echo=FALSE}
+
+
 
 #TIPS FOR IMPROVING DENSITY PLOTS USING GGPLOT
 #add geom_smooth term for observed and unobserved/predicted values
