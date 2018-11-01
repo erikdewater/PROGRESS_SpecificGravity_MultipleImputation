@@ -193,10 +193,8 @@ summary(fit)
 
 
 ```
-
+## Assign missing values among subjects with SG to test in xgboost
 ```{r assign missing values, echo=FALSE}
-
-####assign missing values among subjects with SG to test in xgboost###
 
 #see missing across main dataset
 sapply(SG_sub, function(x) sum(is.na(x)))
