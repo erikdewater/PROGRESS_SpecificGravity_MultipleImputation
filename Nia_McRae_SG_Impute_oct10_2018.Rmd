@@ -1,0 +1,238 @@
+---
+title: "Nia_McRae_SG_Impute_oct10_2018"
+author: "Nia McRae"
+date: "October 16, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+##Nia's R Markdown for Multiple Imputation
+
+DATE: October 16, 2018
+
+Nia McRae and Erik de Water created this R markdown for conducting multiple imputation for 100 missing Specific Gravity data
+
+They split up the work. Below is the code for Nia's steps. Erik's steps are in a seperate R markdown document
+
+Erik and Nia are using github to follow each other's work and will eventually merge their R markdowns into one complete document in an effort to produce reproducible code for multiple imputation. 
+
+#First, install and load require packages
+
+```{r variable cleaning and transformations}
+#install and load require packages
+#install.packages("mice")
+#install.packages("lubridate")
+#install.packages("lattice")
+library(haven)
+library(mice)
+library(data.table)
+library(ggplot2)
+library(nlme)
+library(mgcv)
+library(gamm4)
+library(lattice)
+library(lubridate)
+#lattice package interfaces very well with the “mids” object #type that the mice function returns
+
+```
+## Load data and subset to variables you need for the analysis
+
+```{r load data, echo=FALSE}
+
+#load data
+SG_data <- read_sas("J:/PM/Element/DATABASES-Mexico/DATASETS SENT/erik_nia_sg_imp_oct10_2018.sas7bdat")
+
+SG_data <-as.data.table(SG_data)
+
+#subset to variables needed for model
+SG_sub <- SG_data[,.(folio, gest_age_weeks, etapa, mothers_age, fecha_control, mother_bmi, SG,
+mEP2_Conc_ngml, mBP_Conc_ngml, miBP_Conc_ngml, mBzP2_Conc_ngml, mECPP_Conc_ngml)]
+
+SG_sub <- SG_sub[etapa =="2T"]
+
+#see that all phtalates and SG are numeric 
+class(SG_sub$mEP2_Conc_ngml)
+class(SG_sub$mBP_Conc_ngml)
+class(SG_sub$miBP_Conc_ngml)
+class(SG_sub$mBzP2_Conc_ngml)
+class(SG_sub$mECPP_Conc_ngml)
+class(SG_sub$SG)
+
+```
+## Compute Geometric Mean
+
+```{r geometric mean, echo=FALSE}
+
+#create natural log of phtalates of interest
+SG_sub[, mEP2_Conc_ngml_l := log(mEP2_Conc_ngml)]
+SG_sub[, mBP_Conc_ngml_l := log(mBP_Conc_ngml)]
+SG_sub[, miBP_Conc_ngml_l := log(miBP_Conc_ngml)]
+SG_sub[, mBzP2_Conc_ngml_l := log(mBzP2_Conc_ngml)]
+SG_sub[, mECPP_Conc_ngml_l := log(mECPP_Conc_ngml)]
+
+#create exponential function then create variable to represent the geometric #mean of all five phtalates
+e <- exp(1) 
+SG_sub[, phthalates := e^(rowMeans(SG_sub[, c("mEP2_Conc_ngml_l", "mBP_Conc_ngml_l", "miBP_Conc_ngml_l", 
+                                               "mBzP2_Conc_ngml_l", "mECPP_Conc_ngml_l")]))]
+
+```
+#create season of data collection variable by converting date of visit into days #of the year and then converting it to sine/cosine
+
+```{r season variable, echo=FALSE}
+
+SG_sub[, date_visit := ymd(fecha_control)]
+SG_sub[, days := yday(date_visit) ]
+
+#have maximum be either 365 days or include leap year if there is leap year
+SG_sub[, time.sin := sinpi(2 * (days - 1)/(365 + lubridate::leap_year(date_visit)(days, na.rm = T) - 1))]
+
+SG_sub[, time.cos := cospi(2 * (days - 1)/(365 + lubridate::leap_year(date_visit)(days, na.rm = T) - 1))]
+
+#review descriptive stats of specific gravity variable
+summary(SG_sub$SG)
+sd(SG_sub$SG, na.rm=TRUE)
+
+SG_sub[folio == 380]
+
+
+#review scatterplots and see if there is any outliers
+#It looks like there's one possible outlier which is value of 1.057000
+#this is more than 3 SD from the mean
+#the mean and median are the same: 1.016 
+#and the SD is really small; 0.00660113
+ggplot(SG_sub, aes(x=phthalates, y=SG)) + geom_point()
+ggplot(SG_sub, aes(x=mothers_age, y=SG)) + geom_point()
+ggplot(SG_sub, aes(x=mother_bmi, y=SG)) + geom_point()
+ggplot(SG_sub, aes(x=gest_age_weeks, y=SG)) + geom_point()
+ggplot(SG_sub, aes(x=time.sin, y=SG)) + geom_point()
+ggplot(SG_sub, aes(x=time.cos, y=SG)) + geom_point()
+
+```
+#lets find the folio who is the outlier and see if she is outlier in other #places as well (i.e. attendance list and comments)
+
+```{r outlier, echo=FALSE}
+
+
+#sort in ascending order to see folio with highest SG at very end
+SG_sub_ascend <- SG_sub[order(SG),]
+
+#here is the folio with the outlier
+outlier_folio <- SG_sub[folio == 380 & etapa == '3T']
+#Allan said set this to missing 
+
+#we are only focusing on 2T
+
+
+
+```
+## Conduct spline regression to see if nonlinear model is appropriate 
+
+```{r spline regression, echo=FALSE}
+#I'm using the thin plate regression spline which is the default as it is most #popularly used spline
+fit <- gam(SG ~ s(phthalates) + s(mothers_age) + s(mother_bmi) + (gest_age_weeks) + (time.cos) + (time.sin), data = SG_sub)
+summary(fit)
+#all of the edfs are lower than 8 so linear model is better fit than nonlinear #model
+
+
+#EDF Values of around 1 tend to be close to a linear term. Anything at 8 or above is non-linear 
+#as shown here: https://kevintshoemaker.github.io/NRES-746/Generalized%20Additive%20Models%20(GAMs).pdf
+#date of visit and phtalates have a significant association with SG
+
+#subset only to variables needed for imputation model
+SG_sub<-SG_sub[,.(folio, SG, phthalates, mothers_age, mother_bmi, gest_age_weeks, time.sin, time.cos)]
+
+```
+## Use Mice package to run multiple imputation
+
+```{r multiple imputation, echo=FALSE}
+
+#MICE PACKAGE
+#call the mice package
+init = mice(SG_sub, maxit=0) 
+meth = init$method
+predM = init$predictorMatrix
+
+#indicate the variables that will be removed as predictors
+predM[, c("SG", "folio")]=0
+
+
+#indicate the predictors and specify the methods for imputing the missing values
+#you can create a "meth" vector that assigns a regression to each variable
+#and then have "method = meth" in the multiple imputation model
+#But Elena said it was okay to use default which is method=NULL
+#meth[c("phthalates")]="norm"
+#meth[c("mothers_age")]="norm"
+#meth[c("mother_bmi")]="norm"
+#meth[c("gest_age_weeks")]="norm"
+#meth[c("time.cos")]="norm"
+#meth[c("time.sin")]="norm"
+
+#run the multiple (m=10) imputation model
+#instead of using default, I used "cart" method which stands for 
+#"classification and regression trees"
+
+set.seed(103)
+imputed = mice(SG_sub, method='cart', predictorMatrix=predM, m=10)
+#CORRECTION: using complete function from mice package is not what we wanted
+#instead, use default method (pmm) in mice package, 
+#and you should not use the complete function to apply imputation; Instead, you #should extract all bootstrapping datasets (in our case, all 10 of the #subsamples) then find the mean of all of them and apply them to imputation of #missing data
+#imputed <- complete(imputed)
+#The above information is for my edification. We have moved on to using
+#xgboost instead of mice package as shown here: #Nia_McRae_SG_Predict_xgboost_oct30_2018.Rmd
+
+#Check for missing data in the imputed dataset.
+#great! no missing
+sapply(imputed, function(x) sum(is.na(x)))
+
+#convert to data table
+class(imputed)
+imputed<-as.data.table(imputed)
+
+
+#Density Plot of Original and Imputed Specific Gravity
+#Good! It looks aligned. Using 'cart' method was the best decision.
+plot(density(imputed$SG), col="blue", 
+     xlab="Specific Gravity", #Change the x-axis label
+     ylab="Density", #y-axis label
+     main="Density Plot of Original and Imputed Specific Gravity")#Main title
+lines(density(SG_sub$SG, na.rm=TRUE), col="red")
+legend(1.025, 50, legend=c("Original SG", "Imputed SG"),
+       col=c("red", "blue"), lwd=1:1, cex=0.8,
+       title="SG Type", text.font=4, bg='white')
+
+
+#For the sake of comparison, let's impute with mean and compare density plots
+set.seed(103)
+imputed_mean = mice(SG_sub, method='mean', predictorMatrix=predM, m=10)
+imputed_mean <- complete(imputed_mean)
+imputed_mean<-as.data.table(imputed_mean)
+
+#Imputing with mean doesn't create as much alignment as using the default method
+#it's good that we used the default method and not the population mean
+plot(density(imputed_mean$SG), col="blue", 
+     xlab="Specific Gravity", #Change the x-axis label
+     ylab="Density", #y-axis label
+     main="Density Plot of Original and Imputed Specific Gravity")#Main title
+lines(density(SG_sub$SG, na.rm=TRUE), col="red")
+legend(1.025, 80, legend=c("Original SG", "Imputed SG"),
+       col=c("red", "blue"), lwd=1:1, cex=0.8,
+       title="SG Type", text.font=4, bg='white')
+
+#for multiple imputation, "cart" method (i.e. decision trees) produced better density plots 
+#than mean and default method
+
+#I'm writing cleaned dataset for Allan and Elena
+
+write.csv(SG_sub, file = "SG_Impute_Allan_Elena_oct23_2018.csv", row.names=FALSE)
+
+
+```
+```{r mice, echo=FALSE}
+
+
+#FINAL STEP (PENDING: merge imputed data to main dataset, set SG outlier  
+#for folio 380 to missing)
+
