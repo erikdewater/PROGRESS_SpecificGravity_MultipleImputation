@@ -1,0 +1,154 @@
+---
+title: "MultipleImputation_SpecificGravity"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+#Install and load required packages
+```{r}
+install.packages("lubridate")
+library(lubridate)
+library(haven)
+library(data.table)
+library(ggplot2)
+devtools::install_github("ja-thomas/autoxgboost") 
+library(autoxgboost)
+library(xgboost)
+install.packages("DiagrammeR")
+library(DiagrammeR)
+install.packages("caret")
+library(caret)
+install.packages("robustbase")
+library(robustbase)
+install.packages("randomForest")
+library(randomForest)
+library(data.table)
+```
+
+## Set path and import and organize data
+```{r}
+path = '/Users/dewate01/Desktop/PROGRESS_SpecificGravity_MultipleImputation/PROGRESS_SpecificGravity_MultipleImputation'
+setwd(path)
+SG_data = read.csv('ERIK_NIA_SG_imp_oct10_2018.csv')
+
+#select only 2T data
+SG_data = subset(SG_data, etapa=="2T")
+
+##create geometric mean of 5 pthalates that are weakly correlated (as recommended by dr. Allan Just). First compute the natural log of phtalates of interest, and then compute geometric mean and stor ein variable called "phthalates"
+SG_data$mEP2_Conc_ngml_l <- log(SG_data$mEP2_Conc_ngml)
+SG_data$mBP_Conc_ngml_l <- log(SG_data$mBP_Conc_ngml)
+SG_data$miBP_Conc_ngml_l <- log(SG_data$miBP_Conc_ngml)
+SG_data$mBzP2_Conc_ngml_l <- log(SG_data$mBzP2_Conc_ngml)
+SG_data$mECPP_Conc_ngml_l <- log(SG_data$mECPP_Conc_ngml)
+e <- exp(1) 
+SG_data$phthalates <-e^(rowMeans(SG_data[, c("mEP2_Conc_ngml_l", "mBP_Conc_ngml_l", "miBP_Conc_ngml_l", 
+                                               "mBzP2_Conc_ngml_l", "mECPP_Conc_ngml_l")]))
+#convert collection date into number to take seasonality into account
+date = mdy(SG_data$fecha_control)
+SG_data$days = yday(date) 
+
+#create dataframe with only the relevant variables for the prediction anlyses
+SG_data <-as.data.table(SG_data)
+SG_data = SG_data[,.(folio, mothers_age,mother_bmi,days,SG,phthalates,gest_age_weeks)]
+
+
+#create separate dataframes for women with missing vs. non-missing SG values 
+SG_nomiss <- SG_data[!is.na(SG)]
+SG_miss <- SG_data[is.na(SG) & !is.na(phthalates)]
+```
+
+
+##Check distribution of specific gravity. Check for normal distribution and outliers
+```{r}
+#plot a histogram to check distribution
+ggplot(data = SG_data, aes(x = SG, fill = "Red")) +geom_histogram()
+
+#compute mean and SD and check whether there are SG values >3 SD's above/below mean
+mean_SG = mean(SG_data$SG, na.rm =T)
+sd_SG = sd(SG_data$SG, na.rm =T)
+SD3_below = mean_SG - (3*sd_SG)
+SD3_above = mean_SG + (3*sd_SG)
+minSG = min(SG_data$SG, na.rm=T)
+maxSG = max(SG_data$SG, na.rm=T)
+```
+##check whether covariates have missing data
+```{r}
+#Copy from Nia's script
+```
+
+##Use (auto)xgboost to predict missing specific gravity values. First, perform a 5-fold cross-validation on the non-missing SG values. Then use the hyperparameters that were selected based on the cross-validation to predict the missing SG values.
+```{r}
+
+run.autoxgboost.dart <- function(traindt, target, ...){
+  require(autoxgboost)
+  par_dart <- makeParamSet(
+    makeNumericParam("eta", lower = 0.01, upper = 0.2),
+    makeNumericParam("gamma", lower = -7, upper = 6, trafo = function(x) 2^x),
+    makeIntegerParam("max_depth", lower = 3, upper = 20),
+    makeNumericParam("colsample_bytree", lower = 0.5, upper = 1),
+    makeNumericParam("colsample_bylevel", lower = 0.5, upper = 1),
+    makeNumericParam("lambda", lower = -10, upper = 10, trafo = function(x) 2^x),
+    makeNumericParam("alpha", lower = -10, upper = 10, trafo = function(x) 2^x),
+    makeNumericParam("subsample", lower = 0.5, upper = 1),
+    makeDiscreteParam("booster", values = c("dart")),
+    makeDiscreteParam("sample_type", values = c("uniform", "weighted"), 
+                      requires = quote(booster == "dart")),
+    makeDiscreteParam("normalize_type", values = c("tree", "forest"), 
+                      requires = quote(booster == "dart")),
+    makeNumericParam("rate_drop", lower = 0, upper = 1, requires = quote(booster == "dart")),
+    makeNumericParam("skip_drop", lower = 0, upper = 1, requires = quote(booster == "dart")),
+    makeLogicalParam("one_drop", requires = quote(booster == "dart"))
+  )
+  
+  reg_task <- makeRegrTask(data = as.data.frame(traindt), target = target)
+  MBOctrl <- makeMBOControl()
+  ctrl <- setMBOControlTermination(control = MBOctrl, iters = 160)
+  
+  set.seed(1234)
+  reg_auto_dart <- autoxgboost(reg_task, par.set = par_dart,
+                               control = ctrl
+                               # nthread = xgb_threads
+  )
+  return(reg_auto_dart)
+}
+
+# create 5 folds
+n_folds <- 5
+SG_nomiss$index <- 1:nrow(SG_nomiss)
+Folds <- caret::createFolds(SG_nomiss$index, k = n_folds)
+str(Folds)
+
+# store output
+rmse_cv <- rep(NA, n_folds)
+dart_parameters <- dart_parameters2 <-  list()
+
+mclapply(1:5,function(i){
+  tmp = SG_nomiss[,.(mothers_age,mother_bmi,days,SG,phthalates,gest_age_weeks)]
+  train_XY <- tmp[-Folds[[i]] ]
+  test_XY <-  tmp[ Folds[[i]] ]
+  # this step takes a while.
+  reg_auto_dart <- run.autoxgboost.dart(traindt = train_XY, target = 'SG')
+  # predict to test dataset
+  xgb_pred <- predict(reg_auto_dart, newdata=test_XY)
+  SG_nomiss$pred[Folds[[i]] ] <<- xgb_pred$data$response
+  rmse_cv[i] <<- sqrt(mean((xgb_pred$data$truth - xgb_pred$data$response)^2))  
+  
+  # I stored two versions of parameters
+  dart_parameters[[i]] <<- mlr::getHyperPars(reg_auto_dart$final.learner)
+  dart_parameters2[[i]] <<- unlist(dart_parameters[[i]])
+},mc.cores=5)
+
+# total rmse is:
+rmse_total <- sqrt(mean(rmse_cv^2))
+rmse_total
+
+# R2 (how much has been explained): 
+(1- rmse_total / sqrt(mean((SG_nomiss$SG)^2)))
+
+```
+
