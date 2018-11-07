@@ -83,4 +83,53 @@ minSG = min(SG_data$SG, na.rm=T)
 maxSG = max(SG_data$SG, na.rm=T)
 SG_data$SG_outlier [SG_data$SG> SD3_above] <-1
 SG_data$SG_outlier [SG_data$SG< SD3_above] <-0
+#remove outliers from dataset (one subject, folio 380, with biologically impossible value)
+SG_data = SG_data[is.na(SG_data$SG) | SG_data$SG < SD3_above,]
+
 ```
+
+##Use mice package to perform multiple imputation analyses (10 iterations)
+```{r}
+#call the mice package
+init = mice(SG_data, maxit=0) 
+meth = init$method
+predM = init$predictorMatrix
+
+#indicate the variables that will be removed as predictors
+predM[, c("SG", "folio")]=0
+
+
+#specify the predictors (norm = continuous variables)
+meth[c("phthalates")]="norm"
+meth[c("mothers_age")]="norm"
+meth[c("mother_bmi")]="norm"
+meth[c("gest_age_weeks")]="norm"
+meth[c("time.cos")]="norm"
+meth[c("time.sin")]="norm"
+
+#perform mi analyses with pmm method
+set.seed(103)
+imputed_pmm = mice(SG_data, method='pmm', predictorMatrix=predM, m=10)
+imputed_pmm <- complete(imputed_pmm)
+
+#Check for missing data in the imputed dataset.
+sapply(imputed_pmm, function(x) sum(is.na(x)))
+
+#convert to data table
+class(imputed_pmm)
+imputed_pmm<-as.data.table(imputed_pmm)
+
+
+#Density Plot of Original and Imputed Specific Gravity
+plot(density(imputed_pmm$SG), col="blue", 
+     xlab="Specific Gravity", #Change the x-axis label
+     ylab="Density", #y-axis label
+     main="Density Plot of Original and Imputed Specific Gravity")#Main title
+lines(density(SG_sub$SG, na.rm=TRUE), col="red")
+legend(1.04, 50, legend=c("Original SG", "Imputed SG"),
+       col=c("red", "blue"), lwd=1:1, cex=0.8,
+       title="SG Type", text.font=4, bg='white')
+
+
+```
+
