@@ -13,27 +13,38 @@ knitr::opts_chunk$set(echo = TRUE)
 ```{r}
 install.packages("mice")
 install.packages("lubridate")
-library(lubridate)
+install.packages("lattice")
+install.packages("gamm4")
 library(haven)
 library(mice)
 library(data.table)
 library(ggplot2)
+library(nlme)
+library(mgcv)
+library(gamm4)
+library(lattice)
+library(lubridate)
 ```
 
 ## Set path and import data
 ```{r}
 path = '/Users/dewate01/Desktop/PROGRESS_SpecificGravity_MultipleImputation/PROGRESS_SpecificGravity_MultipleImputation'
 setwd(path)
-SG_data = read.csv('ERIK_NIA_SG_imp_oct10_2018.csv')
+SG_data = read.csv('ERIK_NIA_SG_imp_nov7_2018_updated.csv')
 ```
 
 ##compute season of collection date to control for seasonal variation in data collection. First convert the date into a single number, and then compute the sine and cosine of time as indexes of season
 ```{r}
-date = mdy(SG_data$fecha_control)
-days = yday(date) 
+SG_data$date = mdy(SG_data$fecha_control)
+SG_data$days = yday(date) 
+SG_data$time.sin = sinpi(2 * (SG_data$days - 1)/(365 + lubridate::leap_year(SG_data$date) - 1))
+SG_data$time.cos = cospi(2 * (SG_data$days - 1)/(365 + lubridate::leap_year(SG_data$date)- 1))
 
-SG_data$time.sin = sinpi(2 * (days - 1)/(365 +max(days, na.rm = T) - 1))
-SG_data$time.cos = cospi(2 * (days - 1)/(365 +max(days, na.rm = T) - 1))
+##plot sine and cosine to check distribution
+plot_sin = ggplot(SG_data, aes(days, time.sin)) + geom_point() 
+plot_sin
+plot_cos = ggplot(SG_data, aes(days, time.cos)) + geom_point() 
+plot_cos
 ```
 
 ## create an average variable that represents the geometric mean of 5 phthalates that are weakly correlated with each other (as recommendended by Dr. Alan Just). Associations between this average phthalates variable and specific gravity will later be explored
@@ -51,23 +62,27 @@ SG_data$phthalates <-e^(rowMeans(SG_data[, c("mEP2_Conc_ngml_l", "mBP_Conc_ngml_
                                                "mBzP2_Conc_ngml_l", "mECPP_Conc_ngml_l")]))
 ```
 
-##linear regression analyses, regressing covariates and phthalates (geometric mean of 5 phthalates) on specific gravity. These analyses are performed to check whether phthalates and covariates are linearly associated with specific gravity. Covariates were selected after consulting a clinician (NAME???) who is an expert on phthalates.  
+##linear regression analyses, regressing covariates and phthalates (geometric mean of 5 phthalates) on specific gravity. These analyses are performed to check whether phthalates and covariates are linearly associated with specific gravity. Covariates were suggested by a clinician (phthalates, maternal age, maternal BMI, season, gestational age), selected based on a literature review on prenatal phthalate exposure (parity (v69), secondhadn smoking, SES, prenatal depression and anxiety, maternal education) and biomarkers of infection (selected by Nia & Erik, given that infection affects urine density).  
 ```{r}
-lm_BMI = lm(SG_data$SG ~ SG_data$mother_bmi)
-summary(lm_BMI)
-lm_MatAge = lm(SG_data$SG ~ SG_data$mothers_age)
-summary(lm_MatAge)
-lm_GestAge = lm(SG_data$SG ~ SG_data$gest_age_weeks)
-summary(lm_GestAge)
-lm_Phthalates = lm(SG_data$SG ~ SG_data$phthalates)
-summary(lm_Phthalates) 
-lm_time.sin = lm(SG_data$SG ~ SG_data$time.sin)
-summary(lm_time.sin)
-lm_time.cos = lm(SG_data$SG ~ SG_data$time.cos)
-summary(lm_time.cos)
-lm_PhthalatesCovariates = lm(SG_data$SG ~ SG_data$phthalates + SG_data$mother_bmi + SG_data$mothers_age + SG_data$gest_age_weeks + SG_data$time.sin + SG_data$time.cos)
+
+#multiple regression, excluding variables that have >25% missing data (v69, epds_pregn, sum_pregn_anx)
+lm_PhthalatesCovariates = lm(SG_data$SG ~ SG_data$phthalates + SG_data$mothers_age + SG_data$mother_bmi + SG_data$time.sin + SG_data$cbc_basoM + SG_data$smoke_inside + SG_data$ferritina_M + SG_data$cbc_adeM + SG_data$cbc_eosiM + SG_data$cbc_hematM + SG_data$cbc_hemogM + SG_data$cbc_linfoM + SG_data$cbc_monoM + SG_data$cbc_volcorM + SG_data$SES_3cat2T + SG_data$educ_3cat2T + SG_data$gest_age_weeks + SG_data$time.cos)
 summary(lm_PhthalatesCovariates)
+
+#3 covariates are associated with SG in linear regression analyses(p<0.1): phtahalates, times.sin and cbc_basoM
 ```
+###  Conduct spline regression to see if nonlinear model is appropriate 
+
+```{r}
+#I'm using the thin plate regression spline which is the default as it is most #popularly used spline.  Gestational age, secondhand smoking, SES and maternal education were excluded from this model, because I got the error message: A term has fewer unique covariate combinations than specified maximum degrees of freedom.
+
+non_linear <- gam(SG ~ s(phthalates) + s(mothers_age) + s(mother_bmi)  + s(time.cos) + s(time.sin) + s(cbc_basoM) + s(ferritina_M) + s(cbc_adeM) + s(cbc_eosiM) + s(cbc_hematM) + s(cbc_hemogM) +s(cbc_linfoM) + s(cbc_monoM) +s(cbc_volcorM), data = SG_data)
+summary(non_linear)
+
+#variables that are better modeled by a non-linear term (i.e., edf much larger than 1) are phthalates, maternal BMI, ferritin, hemoglobin, lymphocytes, and monocytes
+
+```
+
 
 ##Check distribution of specific gravity. Check for normal distribution and outliers
 ```{r}
