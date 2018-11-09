@@ -36,7 +36,7 @@ SG_data = read.csv('ERIK_NIA_SG_imp_nov7_2018_updated.csv')
 ##compute season of collection date to control for seasonal variation in data collection. First convert the date into a single number, and then compute the sine and cosine of time as indexes of season
 ```{r}
 SG_data$date = mdy(SG_data$fecha_control)
-SG_data$days = yday(date) 
+SG_data$days = yday(SG_data$date) 
 SG_data$time.sin = sinpi(2 * (SG_data$days - 1)/(365 + lubridate::leap_year(SG_data$date) - 1))
 SG_data$time.cos = cospi(2 * (SG_data$days - 1)/(365 + lubridate::leap_year(SG_data$date)- 1))
 
@@ -105,46 +105,85 @@ SG_data = SG_data[is.na(SG_data$SG) | SG_data$SG < SD3_above,]
 
 ##Use mice package to perform multiple imputation analyses (10 iterations)
 ```{r}
+#create dataset with only variables that will be used in MI analyses
+
+MI_data = subset(SG_data, select = c(1, 10, 11, 19:21, 23:26, 28, 29, 47, 48, 51, 53, 54, 57, 58, 64))
+
+
 #call the mice package
-init = mice(SG_data, maxit=0) 
-meth = init$method
+init = mice(MI_data, maxit=0) 
 predM = init$predictorMatrix
 
 #indicate the variables that will be removed as predictors
 predM[, c("SG", "folio")]=0
 
+#indicate the predictors and specify the methods for imputing the missing values
 
-#specify the predictors (norm = continuous variables)
-meth[c("phthalates")]="norm"
-meth[c("mothers_age")]="norm"
-meth[c("mother_bmi")]="norm"
-meth[c("gest_age_weeks")]="norm"
-meth[c("time.cos")]="norm"
-meth[c("time.sin")]="norm"
+library(magrittr)
+MI_data$smoke_inside %<>% factor(levels=c(0L,1L),labels=c("no_smoke","secondhand"), ordered = T)
+MI_data$educ_3cat2T %<>% factor(levels=c(1L,2L,3L),labels=c("< high school","high school", "college"), ordered = T)
+MI_data$SES_3cat2T %<>% factor(levels=c(1L,2L,3L),labels=c("low","medium", "high"), ordered = T)
 
-#perform mi analyses with pmm method
+MI_data$smoke_inside %<>% factor(levels=c(0L,1L), ordered = T)
+MI_data$educ_3cat2T %<>% factor(levels=c(1L,2L,3L),ordered = T)
+MI_data$SES_3cat2T %<>% factor(levels=c(1L,2L,3L), ordered = T)
+
+init$method[c("smoke_inside", "SES_3cat2T", "educ_3cat2T")] = "polr"
+init$method[c("phthalates", "mother_bmi", "ferritina_M", "cbc_hemogM", "cbc_linfoM", "cbc_monoM")] ="quadratic"
+init$method[c("mothers_age", "gest_age_weeks", "time.cos", "time.sin", "cbc_adeM", "cbc_basoM", "cbc_eosiM",  "cbc_hematM", "cbc_volcorM")]="norm"
+
+#remove subjects with missing phtalates data
+MI_data_nomissing = subset(MI_data, (!is.na(MI_data$phthalates)))
+
+#run the multiple (m=10) imputation model
+#instead of using default, I used "cart" method which stands for 
+#"classification and regression trees"
 set.seed(103)
-imputed_pmm = mice(SG_data, method='pmm', predictorMatrix=predM, m=10)
-imputed_pmm <- complete(imputed_pmm)
+imputed = mice(MI_data_nomissing, method=init$method, predictorMatrix=predM, m=10)
+#error message: glm.fit: algorithm did not convergeglm.fit: fitted probabilities numerically 0 or 1 occurred
 
-#Check for missing data in the imputed dataset.
-sapply(imputed_pmm, function(x) sum(is.na(x)))
+#get imputed SG values
+SG_imputed = imputed$imp["SG"]
 
-#convert to data table
-class(imputed_pmm)
-imputed_pmm<-as.data.table(imputed_pmm)
+as.numeric(unlist(SG_imputed$SG))
 
+class(imputed)
+imputed<-as.data.table(imputed)
 
 #Density Plot of Original and Imputed Specific Gravity
-plot(density(imputed_pmm$SG), col="blue", 
+plot(density(imputed$SG), col="blue", 
      xlab="Specific Gravity", #Change the x-axis label
      ylab="Density", #y-axis label
      main="Density Plot of Original and Imputed Specific Gravity")#Main title
 lines(density(SG_sub$SG, na.rm=TRUE), col="red")
-legend(1.04, 50, legend=c("Original SG", "Imputed SG"),
+legend(1.025, 50, legend=c("Original SG", "Imputed SG"),
        col=c("red", "blue"), lwd=1:1, cex=0.8,
        title="SG Type", text.font=4, bg='white')
 
+#For the sake of comparison, let's impute with mean and compare density plots
+set.seed(103)
+imputed_mean = mice(SG_sub, method='mean', predictorMatrix=predM, m=10)
+imputed_mean <- complete(imputed_mean)
+imputed_mean<-as.data.table(imputed_mean)
+
+#Imputing with mean doesn't create as much alignment as using the default method
+#it's good that we used the default method and not the population mean
+plot(density(imputed_mean$SG), col="blue", 
+     xlab="Specific Gravity", #Change the x-axis label
+     ylab="Density", #y-axis label
+     main="Density Plot of Original and Imputed Specific Gravity")#Main title
+lines(density(SG_sub$SG, na.rm=TRUE), col="red")
+legend(1.025, 80, legend=c("Original SG", "Imputed SG"),
+       col=c("red", "blue"), lwd=1:1, cex=0.8,
+       title="SG Type", text.font=4, bg='white')
+
+#for multiple imputation, "cart" method (i.e. decision trees) produced better density plots 
+#than mean and default method
+
+#I'm writing cleaned dataset for Allan and Elena
+write.csv(SG_sub, file = "SG_Impute_Allan_Elena_oct23_2018.csv", row.names=FALSE)
+```
+```{r mice, echo=FALSE}
 
 ```
 
