@@ -1,0 +1,337 @@
+---
+title: "MultipleImputation_SpecificGravity"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+#Install and load required packages
+```{r}
+#install.packages("mice")
+#install.packages("lubridate")
+#install.packages("lattice")
+#install.packages("gamm4")
+#install.packages("Hmisc")
+#install.packages("digest")
+library(haven)
+library(data.table)
+library(ggplot2)
+library(nlme)
+library(mgcv)
+library(gamm4)
+library(lattice)
+library(lubridate)
+library(digest)
+devtools::install_github("ja-thomas/autoxgboost") 
+library(autoxgboost)
+library(xgboost)
+#install.packages("DiagrammeR")
+library(DiagrammeR)
+
+#install.packages(c("NMF", "RANN", "fastICA", "RcppRoll", "Matrix", "ipred", "recipes"))
+#library(c(NMF, RANN, fastICA, RcppRoll, Matrix, ipred, recipes))
+#install.packages("prodlim")
+
+#install.packages("caret")
+library(caret)
+
+#install.packages("robustbase")
+library(robustbase)
+#install.packages("randomForest")
+library(randomForest)
+
+
+```
+
+## Set path and import data
+```{r}
+path = '/Users/dewate01/Desktop/PROGRESS_SpecificGravity_MultipleImputation/PROGRESS_SpecificGravity_MultipleImputation'
+
+#dataset downloaded from Box folder, "Specific Gravity Missing Data Imputation"
+#In it, Erik merged previous variables with additional variables that I sent
+SG_data <- read.csv("ERIK_NIA_SG_imp_nov7_2018_updated.csv")
+```
+
+##compute season of collection date to control for seasonal variation in data collection. 
+```{r}
+SG_data$date = mdy(SG_data$fecha_control)
+SG_data$days = yday(SG_data$date) 
+
+```
+
+## create an average variable that represents the geometric mean of 5 phthalates that are weakly correlated with each other (as recommendended by Dr. Alan Just). Associations between this average phthalates variable and specific gravity will later be explored
+```{r}
+#create natural log of phtalates of interest
+SG_data$mEP2_Conc_ngml_l <- log(SG_data$mEP2_Conc_ngml)
+SG_data$mBP_Conc_ngml_l <- log(SG_data$mBP_Conc_ngml)
+SG_data$miBP_Conc_ngml_l <- log(SG_data$miBP_Conc_ngml)
+SG_data$mBzP2_Conc_ngml_l <- log(SG_data$mBzP2_Conc_ngml)
+SG_data$mECPP_Conc_ngml_l <- log(SG_data$mECPP_Conc_ngml)
+
+#create exponential function then create variable which is geometric mean
+e <- exp(1) 
+SG_data$phthalates <-e^(rowMeans(SG_data[, c("mEP2_Conc_ngml_l", "mBP_Conc_ngml_l", "miBP_Conc_ngml_l", 
+                                               "mBzP2_Conc_ngml_l", "mECPP_Conc_ngml_l")]))
+```
+
+
+##Check distribution of specific gravity. Check for normal distribution and outliers
+```{r echo= FALSE}
+#plot a histogram to check distribution
+ggplot(data = SG_data, aes(x = SG, fill = "Red")) +geom_histogram()
+
+#compute mean and SD and check whether there are SG values >3 SD's above/below mean
+mean_SG = mean(SG_data$SG, na.rm =T)
+sd_SG = sd(SG_data$SG, na.rm =T)
+SD3_below = mean_SG - (3*sd_SG)
+SD3_above = mean_SG + (3*sd_SG)
+minSG = min(SG_data$SG, na.rm=T)
+maxSG = max(SG_data$SG, na.rm=T)
+SG_data$SG_outlier [SG_data$SG> SD3_above] <-1
+SG_data$SG_outlier [SG_data$SG< SD3_above] <-0
+
+```
+
+#run xgboost
+```{r, echo= FALSE}
+
+run.autoxgboost.dart <- function(traindt, target, ...){
+  require(autoxgboost)
+  par_dart <- makeParamSet(
+    makeNumericParam("eta", lower = 0.01, upper = 0.2),
+    makeNumericParam("gamma", lower = -7, upper = 6, trafo = function(x) 2^x),
+    makeIntegerParam("max_depth", lower = 3, upper = 20),
+    makeNumericParam("colsample_bytree", lower = 0.5, upper = 1),
+    makeNumericParam("colsample_bylevel", lower = 0.5, upper = 1),
+    makeNumericParam("lambda", lower = -10, upper = 10, trafo = function(x) 2^x),
+    makeNumericParam("alpha", lower = -10, upper = 10, trafo = function(x) 2^x),
+    makeNumericParam("subsample", lower = 0.5, upper = 1),
+    makeDiscreteParam("booster", values = c("dart")),
+    makeDiscreteParam("sample_type", values = c("uniform", "weighted"), 
+                      requires = quote(booster == "dart")),
+    makeDiscreteParam("normalize_type", values = c("tree", "forest"), 
+                      requires = quote(booster == "dart")),
+    makeNumericParam("rate_drop", lower = 0, upper = 1, requires = quote(booster == "dart")),
+    makeNumericParam("skip_drop", lower = 0, upper = 1, requires = quote(booster == "dart")),
+    makeLogicalParam("one_drop", requires = quote(booster == "dart"))
+  )
+  
+  reg_task <- makeRegrTask(data = as.data.frame(traindt), target = target)
+  MBOctrl <- makeMBOControl()
+  ctrl <- setMBOControlTermination(control = MBOctrl, iters = 160)
+  
+  set.seed(1234)
+  reg_auto_dart <- autoxgboost(reg_task, par.set = par_dart,
+                               control = ctrl
+                               # nthread = xgb_threads
+  )
+  return(reg_auto_dart)
+}
+
+SG_data<-setDT(SG_data)
+SG_nomiss <- SG_data[!is.na(SG) & !is.na(phthalates)]
+
+
+# create 5 folds
+
+ 
+n_folds <- 5
+SG_nomiss$index <- 1:nrow(SG_nomiss)
+Folds <- caret::createFolds(SG_nomiss$index, k = n_folds)
+str(Folds)
+
+# store output
+rmse_cv <- rep(NA, n_folds)
+dart_parameters <- dart_parameters2 <-  list()
+ install.packages("paralell")
+ library(parallel)
+parallel::mclapply(1:5,function(i){
+  tmp = SG_nomiss[, .(gest_age_weeks, SG, days,mothers_age, mother_bmi, phthalates)]
+  train_XY <- tmp[-Folds[[i]] ]
+  test_XY <-  tmp[ Folds[[i]] ]
+  # this step takes a while.
+  reg_auto_dart <- run.autoxgboost.dart(traindt = train_XY, target = 'SG')
+  # predict to test dataset
+  xgb_pred <- predict(reg_auto_dart, newdata=test_XY)
+  SG_nomiss$pred[Folds[[i]] ] <<- xgb_pred$data$response
+  rmse_cv[i] <<- sqrt(mean((xgb_pred$data$truth - xgb_pred$data$response)^2))  
+  
+  # I stored two versions of parameters
+  dart_parameters[[i]] <<- mlr::getHyperPars(reg_auto_dart$final.learner)
+  dart_parameters2[[i]] <<- unlist(dart_parameters[[i]])
+}, mc.cores=1)
+
+
+
+
+# total rmse is:
+rmse_total <- sqrt(mean(rmse_cv^2))
+rmse_total
+
+#create different subsets for each fold, in order to compute R2 per fold
+
+SG_fold1 = subset(SG_nomiss, index %in% Folds$Fold1)
+SG_fold2 = subset(SG_nomiss, index %in% Folds$Fold2)
+SG_fold3 = subset(SG_nomiss, index %in% Folds$Fold3)
+SG_fold4 = subset(SG_nomiss, index %in% Folds$Fold4)
+SG_fold5 = subset(SG_nomiss, index %in% Folds$Fold5)
+
+R2_fold1 = (cor(SG_fold1$SG, SG_fold1$pred))^2
+R2_fold2 = (cor(SG_fold2$SG, SG_fold2$pred))^2
+R2_fold3 = (cor(SG_fold3$SG, SG_fold3$pred))^2
+R2_fold4 = (cor(SG_fold4$SG, SG_fold4$pred))^2
+R2_fold5 = (cor(SG_fold5$SG, SG_fold5$pred))^2
+
+# R2 (how much has been explained): 
+
+R2 = (1- rmse_total / sqrt(mean((SG_nomiss$SG - mean(SG_nomiss$SG))^2)))
+R2
+
+#R2 of correlation between observed and predicted SG values
+R2_pred = (cor(SG_nomiss$SG, SG_nomiss$pred))^2
+R2_pred
+
+
+summary(SG_nomiss$pred)
+
+```
+##Use autoxgboost to predict missing values (change trainign set to subjects with measured SG, and testing set to those with missing values)
+```{r}
+run.autoxgboost.dart <- function(traindt, target, ...){
+  require(autoxgboost)
+  par_dart <- makeParamSet(
+    makeNumericParam("eta", lower = 0.01, upper = 0.2),
+    makeNumericParam("gamma", lower = -7, upper = 6, trafo = function(x) 2^x),
+    makeIntegerParam("max_depth", lower = 3, upper = 20),
+    makeNumericParam("colsample_bytree", lower = 0.5, upper = 1),
+    makeNumericParam("colsample_bylevel", lower = 0.5, upper = 1),
+    makeNumericParam("lambda", lower = -10, upper = 10, trafo = function(x) 2^x),
+    makeNumericParam("alpha", lower = -10, upper = 10, trafo = function(x) 2^x),
+    makeNumericParam("subsample", lower = 0.5, upper = 1),
+    makeDiscreteParam("booster", values = c("dart")),
+    makeDiscreteParam("sample_type", values = c("uniform", "weighted"), 
+                      requires = quote(booster == "dart")),
+    makeDiscreteParam("normalize_type", values = c("tree", "forest"), 
+                      requires = quote(booster == "dart")),
+    makeNumericParam("rate_drop", lower = 0, upper = 1, requires = quote(booster == "dart")),
+    makeNumericParam("skip_drop", lower = 0, upper = 1, requires = quote(booster == "dart")),
+    makeLogicalParam("one_drop", requires = quote(booster == "dart"))
+  )
+  
+  reg_task <- makeRegrTask(data = as.data.frame(traindt), target = target)
+  MBOctrl <- makeMBOControl()
+  ctrl <- setMBOControlTermination(control = MBOctrl, iters = 160)
+  
+  set.seed(1234)
+  reg_auto_dart <- autoxgboost(reg_task, par.set = par_dart,
+                               control = ctrl
+                               # nthread = xgb_threads
+  )
+  return(reg_auto_dart)
+}
+
+SG_data<-setDT(SG_data)
+parallel::mclapply(1:5,function(i){
+  tmp = SG_data[, .(gest_age_weeks, SG, days,mothers_age, mother_bmi, phthalates)]
+  train_XY <- tmp[SG]
+  test_XY <-  tmp[ Folds[[i]] ]
+  # this step takes a while.
+  reg_auto_dart <- run.autoxgboost.dart(traindt = train_XY, target = 'SG')
+  # predict to test dataset
+  xgb_pred <- predict(reg_auto_dart, newdata=test_XY)
+  SG_nomiss$pred[Folds[[i]] ] <<- xgb_pred$data$response
+  rmse_cv[i] <<- sqrt(mean((xgb_pred$data$truth - xgb_pred$data$response)^2))  
+  
+  # I stored two versions of parameters
+  dart_parameters[[i]] <<- mlr::getHyperPars(reg_auto_dart$final.learner)
+  dart_parameters2[[i]] <<- unlist(dart_parameters[[i]])
+}, mc.cores=1)
+
+```
+
+##compute density plot
+```{r, echo= FALSE}
+
+#create subsets for observed and predicted SG values
+
+SG_imputed_median<-setDT(SG_imputed_median)
+
+observed<- SG_nomiss[,.(SG)]
+predicted<- SG_imputed_median[,.(SG_imputed_median)]
+
+
+#create indicator variables for each predicted and observed SG #dataset
+observed[!is.na(SG), SG_cat:= 1]
+predicted[!is.na(SG_imputed_median), SG_cat:= 2]
+setnames(predicted, "SG_imputed_median", "SG")
+
+
+#combine observed and predicted values so that they both
+#are in the same variable
+SG_imp <- rbind(observed, predicted)
+
+#give 'factor' class to indicator variable
+SG_imp$SG_cat <-as.factor(SG_imp$SG_cat)
+SG_imp[SG_cat== 1, SG_group:= "Observed Specific Gravity"]
+SG_imp[SG_cat== 2, SG_group:= "Imputed Specific Gravity"]
+SG_imp$SG_group <- as.factor(SG_imp$SG_group)
+
+   
+#density plot for observed and predicted SG
+ggplot(SG_imp, aes(x = SG, color = SG_group)) + geom_density(alpha = 0.5) +
+geom_hline(yintercept=0, colour="white", size=1) +
+  ylab("Density")+
+  xlab("Specific Gravity") +
+  labs(color = "Specific Gravity Type") +
+  theme(legend.title = element_text(size = 10, face = "bold")) + ggtitle("Density Plot of Observed and Imputed Specific Gravity") +
+  theme(plot.title = element_text(size = 12, face = "bold")) +
+  theme_bw()
+
+
+```
+
+```{r, fig.width = 18, fig.height = 32}
+```
+##compute density plot (xgboost)
+```{r, echo= FALSE}
+#create subsets for observed and predicted SG values
+
+SG_nomiss<-setDT(SG_nomiss)
+
+observed_xg<- SG_nomiss[,.(SG)]
+predicted_xg<- SG_nomiss[,.(pred)]
+
+
+#create indicator variables for each predicted and observed SG #dataset
+observed_xg[!is.na(SG), SG_cat:= 1]
+predicted_xg[!is.na(pred), SG_cat:= 2]
+setnames(predicted_xg, "pred", "SG")
+
+
+#combine observed and predicted values so that they both
+#are in the same variable
+SG_imp_xg <- rbind(observed_xg, predicted_xg)
+
+#give 'factor' class to indicator variable
+SG_imp_xg$SG_cat <-as.factor(SG_imp$SG_cat)
+SG_imp_xg[SG_cat== 1, SG_group:= "Observed Specific Gravity"]
+SG_imp_xg[SG_cat== 2, SG_group:= "Imputed Specific Gravity"]
+SG_imp_xg$SG_group <- as.factor(SG_imp$SG_group)
+
+
+#density plot for observed and predicted SG
+ggplot(SG_imp_xg, aes(x = SG, color = SG_group)) + geom_density(alpha = 0.5) +
+  geom_hline(yintercept=0, colour="white", size=1) +
+  ylab("Density")+
+  xlab("Specific Gravity") +
+  labs(color = "Specific Gravity Type") +
+  theme(legend.title = element_text(size = 10, face = "bold")) + ggtitle("Density Plot of Observed and Imputed Specific Gravity (xgboost)") +
+  theme(plot.title = element_text(size = 12, face = "bold")) +
+  theme_bw()
+```
+
+```{r, echo= FALSE}
