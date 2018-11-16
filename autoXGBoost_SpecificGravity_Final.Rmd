@@ -41,7 +41,7 @@ library(caret)
 
 #install.packages("robustbase")
 library(robustbase)
-#install.packages("randomForest")
+install.packages("randomForest")
 library(randomForest)
 
 
@@ -49,11 +49,15 @@ library(randomForest)
 
 ## Set path and import data
 ```{r}
-path = '/Users/dewate01/Desktop/PROGRESS_SpecificGravity_MultipleImputation/PROGRESS_SpecificGravity_MultipleImputation'
+#path = '/Users/dewate01/Desktop/PROGRESS_SpecificGravity_MultipleImputation/PROGRESS_SpecificGravity_MultipleImputation'
+path = '/Users/erikdewater/Downloads/'
+setwd(path)
+SG_data <- read.csv("ERIK_NIA_SG_imp_nov7_2018_updated.csv")
 
 #dataset downloaded from Box folder, "Specific Gravity Missing Data Imputation"
 #In it, Erik merged previous variables with additional variables that I sent
-SG_data <- read.csv("ERIK_NIA_SG_imp_nov7_2018_updated.csv")
+
+
 ```
 
 ##compute season of collection date to control for seasonal variation in data collection. 
@@ -199,7 +203,7 @@ R2_pred
 summary(SG_nomiss$pred)
 
 ```
-##Use autoxgboost to predict missing values (change trainign set to subjects with measured SG, and testing set to those with missing values)
+##Use autoxgboost to predict missing values (change training set to subjects with measured SG, and testing set to those with missing values)
 ```{r}
 run.autoxgboost.dart <- function(traindt, target, ...){
   require(autoxgboost)
@@ -235,15 +239,19 @@ run.autoxgboost.dart <- function(traindt, target, ...){
 }
 
 SG_data<-setDT(SG_data)
+SG_miss<-SG_data[is.na(SG) & !is.na(phthalates)]
+SG_nomiss <- SG_data[!is.na(SG) & !is.na(phthalates)]
+
 parallel::mclapply(1:5,function(i){
-  tmp = SG_data[, .(gest_age_weeks, SG, days,mothers_age, mother_bmi, phthalates)]
-  train_XY <- tmp[SG]
-  test_XY <-  tmp[ Folds[[i]] ]
+ SG_miss = SG_miss[, .(gest_age_weeks, SG, days,mothers_age, mother_bmi, phthalates)]
+ SG_nomiss = SG_nomiss[, .(gest_age_weeks, SG, days,mothers_age, mother_bmi, phthalates)]
+  train_XY <- SG_nomiss
+  test_XY <-  SG_nomiss
   # this step takes a while.
   reg_auto_dart <- run.autoxgboost.dart(traindt = train_XY, target = 'SG')
   # predict to test dataset
   xgb_pred <- predict(reg_auto_dart, newdata=test_XY)
-  SG_nomiss$pred[Folds[[i]] ] <<- xgb_pred$data$response
+  SG_miss$pred<<- xgb_pred$data$response
   rmse_cv[i] <<- sqrt(mean((xgb_pred$data$truth - xgb_pred$data$response)^2))  
   
   # I stored two versions of parameters
