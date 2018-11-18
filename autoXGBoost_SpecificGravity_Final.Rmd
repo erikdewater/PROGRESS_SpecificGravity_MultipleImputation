@@ -41,7 +41,7 @@ library(caret)
 
 #install.packages("robustbase")
 library(robustbase)
-install.packages("randomForest")
+#install.packages("randomForest")
 library(randomForest)
 
 
@@ -49,15 +49,11 @@ library(randomForest)
 
 ## Set path and import data
 ```{r}
-#path = '/Users/dewate01/Desktop/PROGRESS_SpecificGravity_MultipleImputation/PROGRESS_SpecificGravity_MultipleImputation'
-path = '/Users/erikdewater/Downloads/'
-setwd(path)
-SG_data <- read.csv("ERIK_NIA_SG_imp_nov7_2018_updated.csv")
+path = '/Users/dewate01/Desktop/PROGRESS_SpecificGravity_MultipleImputation/PROGRESS_SpecificGravity_MultipleImputation'
 
 #dataset downloaded from Box folder, "Specific Gravity Missing Data Imputation"
 #In it, Erik merged previous variables with additional variables that I sent
-
-
+SG_data <- read.csv("ERIK_NIA_SG_imp_nov7_2018_updated.csv")
 ```
 
 ##compute season of collection date to control for seasonal variation in data collection. 
@@ -100,7 +96,7 @@ SG_data$SG_outlier [SG_data$SG< SD3_above] <-0
 
 ```
 
-#run xgboost
+#run xgboost using training dataset with subjects that have SG that we artificially applied missing values 
 ```{r, echo= FALSE}
 
 run.autoxgboost.dart <- function(traindt, target, ...){
@@ -201,108 +197,6 @@ R2_pred
 
 
 summary(SG_nomiss$pred)
-
-```
-##Use autoxgboost to predict missing values (change training set to subjects with measured SG, and testing set to those with missing values)
-```{r}
-run.autoxgboost.dart <- function(traindt, target, ...){
-  require(autoxgboost)
-  par_dart <- makeParamSet(
-    makeNumericParam("eta", lower = 0.01, upper = 0.2),
-    makeNumericParam("gamma", lower = -7, upper = 6, trafo = function(x) 2^x),
-    makeIntegerParam("max_depth", lower = 3, upper = 20),
-    makeNumericParam("colsample_bytree", lower = 0.5, upper = 1),
-    makeNumericParam("colsample_bylevel", lower = 0.5, upper = 1),
-    makeNumericParam("lambda", lower = -10, upper = 10, trafo = function(x) 2^x),
-    makeNumericParam("alpha", lower = -10, upper = 10, trafo = function(x) 2^x),
-    makeNumericParam("subsample", lower = 0.5, upper = 1),
-    makeDiscreteParam("booster", values = c("dart")),
-    makeDiscreteParam("sample_type", values = c("uniform", "weighted"), 
-                      requires = quote(booster == "dart")),
-    makeDiscreteParam("normalize_type", values = c("tree", "forest"), 
-                      requires = quote(booster == "dart")),
-    makeNumericParam("rate_drop", lower = 0, upper = 1, requires = quote(booster == "dart")),
-    makeNumericParam("skip_drop", lower = 0, upper = 1, requires = quote(booster == "dart")),
-    makeLogicalParam("one_drop", requires = quote(booster == "dart"))
-  )
-  
-  reg_task <- makeRegrTask(data = as.data.frame(traindt), target = target)
-  MBOctrl <- makeMBOControl()
-  ctrl <- setMBOControlTermination(control = MBOctrl, iters = 160)
-  
-  set.seed(1234)
-  reg_auto_dart <- autoxgboost(reg_task, par.set = par_dart,
-                               control = ctrl
-                               # nthread = xgb_threads
-  )
-  return(reg_auto_dart)
-}
-
-SG_data<-setDT(SG_data)
-SG_miss<-SG_data[is.na(SG) & !is.na(phthalates)]
-SG_nomiss <- SG_data[!is.na(SG) & !is.na(phthalates)]
-
-parallel::mclapply(1:5,function(i){
- SG_miss = SG_miss[, .(gest_age_weeks, SG, days,mothers_age, mother_bmi, phthalates)]
- SG_nomiss = SG_nomiss[, .(gest_age_weeks, SG, days,mothers_age, mother_bmi, phthalates)]
-  train_XY <- SG_nomiss
-  test_XY <-  SG_nomiss
-  # this step takes a while.
-  reg_auto_dart <- run.autoxgboost.dart(traindt = train_XY, target = 'SG')
-  # predict to test dataset
-  xgb_pred <- predict(reg_auto_dart, newdata=test_XY)
-  SG_miss$pred<<- xgb_pred$data$response
-  rmse_cv[i] <<- sqrt(mean((xgb_pred$data$truth - xgb_pred$data$response)^2))  
-  
-  # I stored two versions of parameters
-  dart_parameters[[i]] <<- mlr::getHyperPars(reg_auto_dart$final.learner)
-  dart_parameters2[[i]] <<- unlist(dart_parameters[[i]])
-}, mc.cores=1)
-
-```
-
-##compute density plot
-```{r, echo= FALSE}
-
-#create subsets for observed and predicted SG values
-
-SG_imputed_median<-setDT(SG_imputed_median)
-
-observed<- SG_nomiss[,.(SG)]
-predicted<- SG_imputed_median[,.(SG_imputed_median)]
-
-
-#create indicator variables for each predicted and observed SG #dataset
-observed[!is.na(SG), SG_cat:= 1]
-predicted[!is.na(SG_imputed_median), SG_cat:= 2]
-setnames(predicted, "SG_imputed_median", "SG")
-
-
-#combine observed and predicted values so that they both
-#are in the same variable
-SG_imp <- rbind(observed, predicted)
-
-#give 'factor' class to indicator variable
-SG_imp$SG_cat <-as.factor(SG_imp$SG_cat)
-SG_imp[SG_cat== 1, SG_group:= "Observed Specific Gravity"]
-SG_imp[SG_cat== 2, SG_group:= "Imputed Specific Gravity"]
-SG_imp$SG_group <- as.factor(SG_imp$SG_group)
-
-   
-#density plot for observed and predicted SG
-ggplot(SG_imp, aes(x = SG, color = SG_group)) + geom_density(alpha = 0.5) +
-geom_hline(yintercept=0, colour="white", size=1) +
-  ylab("Density")+
-  xlab("Specific Gravity") +
-  labs(color = "Specific Gravity Type") +
-  theme(legend.title = element_text(size = 10, face = "bold")) + ggtitle("Density Plot of Observed and Imputed Specific Gravity") +
-  theme(plot.title = element_text(size = 12, face = "bold")) +
-  theme_bw()
-
-
-```
-
-```{r, fig.width = 18, fig.height = 32}
 ```
 ##compute density plot (xgboost)
 ```{r, echo= FALSE}
@@ -340,6 +234,129 @@ ggplot(SG_imp_xg, aes(x = SG, color = SG_group)) + geom_density(alpha = 0.5) +
   theme(legend.title = element_text(size = 10, face = "bold")) + ggtitle("Density Plot of Observed and Imputed Specific Gravity (xgboost)") +
   theme(plot.title = element_text(size = 12, face = "bold")) +
   theme_bw()
+
+```
+##Use autoxgboost to predict missing values (change training set to subjects with measured SG, and testing set to those with missing values)
+```{r}
+run.autoxgboost.dart <- function(traindt, target, ...){
+  require(autoxgboost)
+  par_dart <- makeParamSet(
+    makeNumericParam("eta", lower = 0.01, upper = 0.2),
+    makeNumericParam("gamma", lower = -7, upper = 6, trafo = function(x) 2^x),
+    makeIntegerParam("max_depth", lower = 3, upper = 20),
+    makeNumericParam("colsample_bytree", lower = 0.5, upper = 1),
+    makeNumericParam("colsample_bylevel", lower = 0.5, upper = 1),
+    makeNumericParam("lambda", lower = -10, upper = 10, trafo = function(x) 2^x),
+    makeNumericParam("alpha", lower = -10, upper = 10, trafo = function(x) 2^x),
+    makeNumericParam("subsample", lower = 0.5, upper = 1),
+    makeDiscreteParam("booster", values = c("dart")),
+    makeDiscreteParam("sample_type", values = c("uniform", "weighted"), 
+                      requires = quote(booster == "dart")),
+    makeDiscreteParam("normalize_type", values = c("tree", "forest"), 
+                      requires = quote(booster == "dart")),
+    makeNumericParam("rate_drop", lower = 0, upper = 1, requires = quote(booster == "dart")),
+    makeNumericParam("skip_drop", lower = 0, upper = 1, requires = quote(booster == "dart")),
+    makeLogicalParam("one_drop", requires = quote(booster == "dart"))
+  )
+  
+  reg_task <- makeRegrTask(data = as.data.frame(traindt), target = target)
+  MBOctrl <- makeMBOControl()
+  ctrl <- setMBOControlTermination(control = MBOctrl, iters = 160)
+  
+  set.seed(1234)
+  reg_auto_dart <- autoxgboost(reg_task, par.set = par_dart,
+                               control = ctrl
+                               # nthread = xgb_threads
+  )
+  return(reg_auto_dart)
+}
+
+#subset main dataset to only variables of interest
+SG_data<-setDT(SG_data)
+SG_data<- SG_data[, .(folio, gest_age_weeks, SG, mothers_age, mother_bmi, days, phthalates)]
+
+#subset only to subjects with complete SG and phtalates data
+SG_nomiss <- SG_data[!is.na(SG) & !is.na(phthalates)]
+
+#subset only to subjects with missing SG and complete phtalates data
+SG_miss <- SG_data[is.na(SG) & !is.na(phthalates)]
+
+#### CREATE FOLDS ####
+
+# create 5 folds for dataset of subjects with complete SG
+n_folds <- 5
+SG_nomiss$index <- 1:nrow(SG_nomiss)
+Folds <- caret::createFolds(SG_nomiss$index, k = n_folds)
+str(Folds)
+
+# create 5 folds for dataset of subjects with no SG
+SG_miss$index <- 1:nrow(SG_miss)
+Folds2 <- caret::createFolds(SG_miss$index, k = n_folds)
+str(Folds2)
+
+dart_parameters <- dart_parameters2 <-  list()
+install.packages("paralell")
+library(parallel)
+parallel::mclapply(1:5,function(i){
+  tmp = SG_nomiss[, .(gest_age_weeks, SG, days, mothers_age, mother_bmi, phthalates)]
+  tmp2 = SG_miss[, .(gest_age_weeks, SG, days, mothers_age, mother_bmi, phthalates)]
+  train_XY <- tmp[ Folds[[i]] ]
+  test_XY <-  tmp2[ Folds2[[i]] ]
+  # this step takes a while.
+  reg_auto_dart <- run.autoxgboost.dart(traindt = train_XY, target = 'SG')
+  # predict to test dataset
+  xgb_pred <- predict(reg_auto_dart, newdata=test_XY)
+  SG_miss$pred [Folds2[[i]] ] <<- (xgb_pred$data$response)
+  rmse_cv <<- sqrt(mean((xgb_pred$data$truth - xgb_pred$data$response)^2))  
+  
+  # I stored two versions of parameters
+  dart_parameters[[i]] <<- mlr::getHyperPars(reg_auto_dart$final.learner)
+  dart_parameters2[[i]] <<- unlist(dart_parameters[[i]])
+}, mc.cores=1)#mc.cores should be set to 1 on Windows and 5 on Mac
+
+
+#create indicator variable of  imputed and non imputed
+SG_nomiss[, imp_indic := 0]
+SG_miss[, imp_indic := 1]
+
+#create indicator variables that specifies where 0/1 categories mean
+SG_nomiss[imp_indic == 0, imp_group := "Original values"]
+SG_miss[imp_indic == 1, imp_group := "Imputed values"]
+
+#drop SG that has all missing
+SG_miss[, SG := NULL]
+
+#give predicted values the column name of SG
+#so that it will be inserted into same column as observed SG
+#when you do rbind
+setnames(SG_miss, "pred", "SG")
+
+
+#combine datasets with missing and nonmissing SG
+final <- rbind(SG_nomiss, SG_miss)
+final <- as.data.table(final)
+
+
+#Export final dataset: final
+write.csv(final, file = "J:/PM/Element/ANALYSIS/Specific Gravity Missing Data Imputation/SG Imputation/PROGRESS_SpecificGravity_MultipleImputation/final_SG_imputation_nov18_2018.csv", row.names = F)
+
+
+#Scatterplot with seperate smoothing lines for observed and predicted SG
+ggplot(final, aes(x=phthalates, y=SG, color=imp_group)) +
+  geom_point(alpha = 0.15, position=position_jitter(width=1,height=.1)) +
+  stat_smooth(method="lm", se = FALSE) +
+  theme_bw() +
+  labs(color = "Specific Gravity Type") +
+  theme(legend.title = element_text(size = 10, face = "bold")) +
+  ylab("Specific Gravity") +
+  xlab("Phthalates") +
+  ggtitle("Scatterplot of Observed and Predicted Specific Gravity") +
+  theme(plot.title = element_text(size = 12, face = "bold"))    
+
+
+
 ```
 
+
 ```{r, echo= FALSE}
+
