@@ -319,7 +319,7 @@ parallel::mclapply(1:5,function(i){
 SG_nomiss[, imp_indic := 0]
 SG_miss[, imp_indic := 1]
 
-#create indicator variables that specifies where 0/1 categories mean
+#create indicator variables that specifies what 0/1 categories #represent
 SG_nomiss[imp_indic == 0, imp_group := "Original values"]
 SG_miss[imp_indic == 1, imp_group := "Imputed values"]
 
